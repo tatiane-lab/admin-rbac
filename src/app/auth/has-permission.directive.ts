@@ -1,54 +1,46 @@
-import {
-  Directive,
-  Input,
-  TemplateRef,
-  ViewContainerRef,
-  OnInit,
-  OnDestroy,
-  inject,
-  effect,
-} from '@angular/core';
+import { Directive, EmbeddedViewRef, TemplateRef, ViewContainerRef, effect, inject, input } from '@angular/core';
+import { Permission } from '../core/models';
 import { PermissionsService } from './permissions.service';
 
-@Directive({
-  selector: '[hasPermission]',
-  standalone: true,
-})
-export class HasPermissionDirective implements OnInit, OnDestroy {
-  @Input({ required: true }) hasPermission!: string | string[];
-  @Input() hasPermissionElse: TemplateRef<unknown> | null = null;
+/**
+ * Diretiva estrutural com semântica de `*ngIf`, reativa a mudanças de permissão.
+ *
+ *   <button *hasPermission="'users:delete'; else locked">Excluir</button>
+ *   <ng-template #locked>...</ng-template>
+ *
+ * Aceita uma permissão ou lista (basta ter uma). `hasPermissionAll` exige todas.
+ */
+@Directive({ selector: '[hasPermission]' })
+export class HasPermissionDirective {
+  readonly hasPermission = input.required<Permission | readonly Permission[]>();
+  readonly hasPermissionElse = input<TemplateRef<unknown> | null>(null);
+  readonly hasPermissionAll = input(false);
 
-  private templateRef = inject(TemplateRef<unknown>);
-  private viewContainer = inject(ViewContainerRef);
-  private permissionsService = inject(PermissionsService);
+  private readonly templateRef = inject(TemplateRef<unknown>);
+  private readonly viewContainer = inject(ViewContainerRef);
+  private readonly permissions = inject(PermissionsService);
 
-  private rendered: 'main' | 'else' | 'none' = 'none';
+  private view: EmbeddedViewRef<unknown> | null = null;
+  private current: 'main' | 'else' | 'none' = 'none';
 
-  ngOnInit() {
-    this.updateView();
+  constructor() {
+    effect(() => {
+      const wanted = this.hasPermission();
+      const list = typeof wanted === 'string' ? [wanted] : wanted;
+      const allowed = this.hasPermissionAll() ? this.permissions.hasAll(list) : this.permissions.hasAny(list);
+      this.render(allowed ? 'main' : 'else');
+    });
   }
 
-  private updateView() {
-    const permissions = Array.isArray(this.hasPermission)
-      ? this.hasPermission
-      : [this.hasPermission];
-
-    const hasAccess = this.permissionsService.hasAny(permissions);
-
-    if (hasAccess && this.rendered !== 'main') {
-      this.viewContainer.clear();
-      this.viewContainer.createEmbeddedView(this.templateRef);
-      this.rendered = 'main';
-    } else if (!hasAccess && this.rendered !== 'else') {
-      this.viewContainer.clear();
-      if (this.hasPermissionElse) {
-        this.viewContainer.createEmbeddedView(this.hasPermissionElse);
-      }
-      this.rendered = 'else';
-    }
-  }
-
-  ngOnDestroy() {
+  private render(target: 'main' | 'else'): void {
+    const elseTpl = this.hasPermissionElse();
+    const next = target === 'else' && !elseTpl ? 'none' : target;
+    if (next === this.current) return;
     this.viewContainer.clear();
+    this.view = null;
+    if (next === 'main') this.view = this.viewContainer.createEmbeddedView(this.templateRef);
+    else if (next === 'else' && elseTpl) this.view = this.viewContainer.createEmbeddedView(elseTpl);
+    this.current = next;
+    this.view?.markForCheck();
   }
 }
